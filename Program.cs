@@ -69,12 +69,13 @@ namespace JavaChoose
         {
             Console.WriteLine("用法：");
             Console.WriteLine("  javachoose -F                    列出所有 Java 安装");
-            Console.WriteLine("  javachoose -f [number]          将指定版本的 bin 目录添加到 PATH 最前面");
+            Console.WriteLine("  javachoose -f [number]          将指定版本的 bin 目录添加到系统 PATH 最前面（需管理员权限）");
             Console.WriteLine("  javachoose -i [path]            导入指定路径的 Java 到用户注册表");
             Console.WriteLine("  javachoose -r [versionName]     移除已导入的版本（如 jdk-17）");
             Console.WriteLine("示例：");
             Console.WriteLine("  javachoose -i D:\\jdk-17");
             Console.WriteLine("  javachoose -r jdk-17");
+            Console.WriteLine("注意：-f 操作需要以管理员身份运行才能修改系统 PATH 和 JAVA_HOME。");
         }
 
         // ========== 导入与移除 ==========
@@ -215,9 +216,27 @@ namespace JavaChoose
                 }
             }
 
-            list = list.GroupBy(x => x.InstallPath).Select(g => g.First()).ToList();
+            // 去重前规范化路径（消除尾部反斜杠差异）
+            list = list.GroupBy(x => NormalizePath(x.InstallPath))
+                       .Select(g => g.First())
+                       .ToList();
+
             list = list.OrderBy(x => x.MajorVersion).ThenBy(x => x.IsJre).ToList();
             return list;
+        }
+
+        // 路径规范化辅助
+        static string NormalizePath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return path;
+            try
+            {
+                return Path.GetFullPath(path).TrimEnd('\\');
+            }
+            catch
+            {
+                return path.TrimEnd('\\');
+            }
         }
 
         static List<JavaInstallation> FindFromRegistry()
@@ -492,6 +511,8 @@ namespace JavaChoose
             }
         }
 
+        // ========== 核心切换功能：修改系统 PATH 和 JAVA_HOME ==========
+
         static void SetJavaPath(string numberArg)
         {
             if (!int.TryParse(numberArg, out int targetVersion))
@@ -537,15 +558,45 @@ namespace JavaChoose
                 return;
             }
 
-            string userPath = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User) ?? "";
-            var pathList = userPath.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-            pathList.RemoveAll(p => string.Equals(p.Trim(), binPath, StringComparison.OrdinalIgnoreCase));
-            pathList.Insert(0, binPath);
-            string newPath = string.Join(";", pathList);
-            Environment.SetEnvironmentVariable("PATH", newPath, EnvironmentVariableTarget.User);
+            // ---- 修改系统 PATH ----
+            string systemPath = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine) ?? "";
+            var pathList = systemPath.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries).ToList();
 
-            Console.WriteLine($"已将 {binPath} 添加到用户 PATH 最前面。");
-            Console.WriteLine("注意：新打开的命令行窗口才会生效。");
+            // 移除已存在的相同路径（忽略大小写）
+            pathList.RemoveAll(p => string.Equals(p.Trim(), binPath, StringComparison.OrdinalIgnoreCase));
+
+            // 插入到最前面
+            pathList.Insert(0, binPath);
+
+            string newPath = string.Join(";", pathList);
+
+            // ---- 修改系统 JAVA_HOME ----
+            string javaHome = selected.InstallPath;
+
+            try
+            {
+                // 写入系统 PATH
+                Environment.SetEnvironmentVariable("PATH", newPath, EnvironmentVariableTarget.Machine);
+                // 写入系统 JAVA_HOME
+                Environment.SetEnvironmentVariable("JAVA_HOME", javaHome, EnvironmentVariableTarget.Machine);
+
+                Console.WriteLine($"已成功切换到：{selected.VersionName}");
+                Console.WriteLine($"  bin 目录：{binPath} 已置于系统 PATH 最前面");
+                Console.WriteLine($"  JAVA_HOME 已设置为：{javaHome}");
+                Console.WriteLine("注意：新打开的命令行窗口才会生效。");
+            }
+            catch (System.Security.SecurityException)
+            {
+                Console.WriteLine("错误：修改系统环境变量需要管理员权限。请以管理员身份重新运行此命令。");
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Console.WriteLine("错误：权限不足，无法修改系统环境变量。请以管理员身份运行。");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"操作失败：{ex.Message}");
+            }
         }
     }
 }
