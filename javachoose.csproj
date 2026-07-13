@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>   <!-- 推荐 net48，Windows 自带运行时 -->
+    <AssemblyName>javachoose</AssemblyName>
+    <RootNamespace>JavaChoose</RootNamespace>
+    <ApplicationIcon>（可选）</ApplicationIcon>
+  </PropertyGroup>
+</Project>
