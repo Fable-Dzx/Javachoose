@@ -5,33 +5,25 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:   # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
-
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '6.0.x'   # 够用来构建 net48 项目
-
-    - name: 还原依赖
-      run: dotnet restore
-
-    - name: 构建 (Release)
-      run: dotnet build --configuration Release --no-restore
-
-    - name: 发布为单文件 exe
-      run: dotnet publish --configuration Release --output ./publish
-
-    - name: 上传构建产物
-      uses: actions/upload-artifact@v4
-      with:
-        name: javachoose-exe
-        path: ./publish/javachoose.exe        name: javachoose-exe
-        path: ./publish/javachoose.exe
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+      - name: Restore
+        run: dotnet restore
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+      - name: Publish
+        run: dotnet publish --configuration Release --output ./publish
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: javachoose-exe
+          path: ./publish/javachoose.exe
