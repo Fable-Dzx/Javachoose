@@ -12,8 +12,6 @@ namespace JavaChoose
         public string InstallPath { get; set; }
         public int MajorVersion { get; set; }
         public bool IsJre { get; set; }
-
-        // JRE 版本号前加 "00"，JDK 直接显示数字
         public string FormattedNumber => IsJre ? $"00{MajorVersion}" : MajorVersion.ToString();
     }
 
@@ -28,43 +26,201 @@ namespace JavaChoose
             }
 
             string option = args[0];
-
-            // 大小写敏感匹配：-F 列出，-f 设置 PATH
-            if (option == "-F")
+            switch (option)
             {
-                ListJavaInstallations();
-            }
-            else if (option == "-f")
-            {
-                if (args.Length < 2)
-                {
-                    Console.WriteLine("错误：-f 选项需要指定版本号。");
+                case "-F":
+                    ListJavaInstallations();
+                    break;
+                case "-f":
+                    if (args.Length < 2)
+                    {
+                        Console.WriteLine("错误：-f 选项需要指定版本号。");
+                        ShowUsage();
+                        return;
+                    }
+                    SetJavaPath(args[1]);
+                    break;
+                case "-i":
+                    if (args.Length < 2)
+                    {
+                        Console.WriteLine("错误：-i 选项需要指定要导入的 Java 安装路径。");
+                        ShowUsage();
+                        return;
+                    }
+                    ImportJava(args[1]);
+                    break;
+                case "-r":
+                    if (args.Length < 2)
+                    {
+                        Console.WriteLine("错误：-r 选项需要指定要移除的版本名（如 jdk-17）。");
+                        ShowUsage();
+                        return;
+                    }
+                    RemoveImported(args[1]);
+                    break;
+                default:
+                    Console.WriteLine($"未知选项：{option}");
                     ShowUsage();
-                    return;
-                }
-                string numberArg = args[1];
-                SetJavaPath(numberArg);
-            }
-            else
-            {
-                Console.WriteLine($"未知选项：{option}");
-                ShowUsage();
+                    break;
             }
         }
 
         static void ShowUsage()
         {
             Console.WriteLine("用法：");
-            Console.WriteLine("  javachoose -F                   列出所有 Java 安装（区分大小写）");
-            Console.WriteLine("  javachoose -f [number]         将指定版本的 bin 目录添加到 PATH 最前面（区分大小写）");
+            Console.WriteLine("  javachoose -F                    列出所有 Java 安装");
+            Console.WriteLine("  javachoose -f [number]          将指定版本的 bin 目录添加到 PATH 最前面");
+            Console.WriteLine("  javachoose -i [path]            导入指定路径的 Java 到用户注册表");
+            Console.WriteLine("  javachoose -r [versionName]     移除已导入的版本（如 jdk-17）");
             Console.WriteLine("示例：");
-            Console.WriteLine("  javachoose -f 8                (匹配 JDK-8，若没有则匹配 JRE-8)");
-            Console.WriteLine("  javachoose -f 008              (精确匹配 JRE-8，注意前导零)");
-            Console.WriteLine("  javachoose -f 17               (匹配 JDK-17)");
-            Console.WriteLine("  javachoose -f 0017             (精确匹配 JRE-17)");
+            Console.WriteLine("  javachoose -i D:\\jdk-17");
+            Console.WriteLine("  javachoose -r jdk-17");
         }
 
+        // ========== 导入与移除 ==========
+
+        static void ImportJava(string path)
+        {
+            if (!Directory.Exists(path))
+            {
+                Console.WriteLine($"错误：路径不存在：{path}");
+                return;
+            }
+
+            string binDir = Path.Combine(path, "bin");
+            if (!Directory.Exists(binDir))
+            {
+                Console.WriteLine($"错误：找不到 bin 目录：{binDir}");
+                return;
+            }
+
+            string javaExe = Path.Combine(binDir, "java.exe");
+            string javacExe = Path.Combine(binDir, "javac.exe");
+            bool hasJava = File.Exists(javaExe);
+            bool hasJavac = File.Exists(javacExe);
+
+            if (!hasJava)
+            {
+                Console.WriteLine($"错误：在 {binDir} 中找不到 java.exe，这不是有效的 Java 安装。");
+                return;
+            }
+
+            bool isJre = !hasJavac;
+            string dirName = new DirectoryInfo(path).Name;
+            if (!TryParseVersionFromPath(dirName, out int majorVersion))
+            {
+                Console.WriteLine($"警告：无法从目录名 '{dirName}' 解析主版本号，请重命名目录为如 'jdk-17' 格式。");
+                return;
+            }
+
+            string versionName = isJre ? $"jre-{majorVersion}" : $"jdk-{majorVersion}";
+            string regPath = @"Software\JavaChoose\Imported";
+
+            try
+            {
+                using (var key = Registry.CurrentUser.CreateSubKey(regPath, true))
+                {
+                    if (key == null)
+                    {
+                        Console.WriteLine("错误：无法创建注册表项，请检查权限。");
+                        return;
+                    }
+                    key.SetValue(versionName, path);
+                }
+                Console.WriteLine($"已成功导入：{versionName} -> {path}");
+
+                Console.Write("是否立即切换到该版本? (y/n): ");
+                string response = Console.ReadLine()?.Trim().ToLower();
+                if (response == "y" || response == "yes")
+                {
+                    SetJavaPath(majorVersion.ToString());
+                }
+                else
+                {
+                    Console.WriteLine("现在运行 javachoose -F 即可看到此版本。");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"写入注册表失败：{ex.Message}");
+            }
+        }
+
+        static void RemoveImported(string versionName)
+        {
+            string regPath = @"Software\JavaChoose\Imported";
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(regPath, true))
+                {
+                    if (key == null)
+                    {
+                        Console.WriteLine("未发现任何已导入的版本。");
+                        return;
+                    }
+                    if (key.GetValue(versionName) == null)
+                    {
+                        Console.WriteLine($"未找到已导入的版本：{versionName}");
+                        return;
+                    }
+                    key.DeleteValue(versionName);
+                    Console.WriteLine($"已移除：{versionName}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"操作失败：{ex.Message}");
+            }
+        }
+
+        // ========== 查找所有 Java ==========
+
         static List<JavaInstallation> FindJavaInstallations()
+        {
+            var list = new List<JavaInstallation>();
+
+            list.AddRange(FindFromRegistry());
+            list.AddRange(ScanDirectories());
+            list.AddRange(FindImported());
+
+            string javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
+            if (!string.IsNullOrEmpty(javaHome) && Directory.Exists(javaHome))
+            {
+                var item = CreateFromPath(javaHome);
+                if (item != null) list.Add(item);
+            }
+
+            string pathEnv = Environment.GetEnvironmentVariable("PATH");
+            if (!string.IsNullOrEmpty(pathEnv))
+            {
+                var paths = pathEnv.Split(';');
+                foreach (var p in paths)
+                {
+                    string trimmedP = p.Trim();
+                    if (string.IsNullOrEmpty(trimmedP)) continue;
+
+                    if (trimmedP.IndexOf("system32", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    if (trimmedP.IndexOf("windows", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+                    string javaExe = Path.Combine(trimmedP, "java.exe");
+                    if (File.Exists(javaExe))
+                    {
+                        string installRoot = Directory.GetParent(trimmedP)?.FullName;
+                        if (!string.IsNullOrEmpty(installRoot) && Directory.Exists(installRoot))
+                        {
+                            var item = CreateFromPath(installRoot);
+                            if (item != null) list.Add(item);
+                        }
+                    }
+                }
+            }
+
+            list = list.GroupBy(x => x.InstallPath).Select(g => g.First()).ToList();
+            list = list.OrderBy(x => x.MajorVersion).ThenBy(x => x.IsJre).ToList();
+            return list;
+        }
+
+        static List<JavaInstallation> FindFromRegistry()
         {
             var list = new List<JavaInstallation>();
             string[] registryRoots = {
@@ -74,7 +230,6 @@ namespace JavaChoose
 
             foreach (var root in registryRoots)
             {
-                // 查找 JDK
                 try
                 {
                     using (var key = Registry.LocalMachine.OpenSubKey($@"{root}\Java Development Kit"))
@@ -87,7 +242,7 @@ namespace JavaChoose
                                 {
                                     if (subKey == null) continue;
                                     var installPath = subKey.GetValue("JavaHome")?.ToString();
-                                    if (string.IsNullOrEmpty(installPath)) continue;
+                                    if (string.IsNullOrEmpty(installPath) || !Directory.Exists(installPath)) continue;
                                     if (TryParseVersion(subKeyName, out int ver))
                                     {
                                         list.Add(new JavaInstallation
@@ -103,10 +258,9 @@ namespace JavaChoose
                         }
                     }
                 }
-                catch (System.Security.SecurityException) { /* 忽略权限问题 */ }
-                catch (UnauthorizedAccessException) { /* 忽略 */ }
+                catch (System.Security.SecurityException) { }
+                catch (UnauthorizedAccessException) { }
 
-                // 查找 JRE
                 try
                 {
                     using (var key = Registry.LocalMachine.OpenSubKey($@"{root}\Java Runtime Environment"))
@@ -119,7 +273,7 @@ namespace JavaChoose
                                 {
                                     if (subKey == null) continue;
                                     var installPath = subKey.GetValue("JavaHome")?.ToString();
-                                    if (string.IsNullOrEmpty(installPath)) continue;
+                                    if (string.IsNullOrEmpty(installPath) || !Directory.Exists(installPath)) continue;
                                     if (TryParseVersion(subKeyName, out int ver))
                                     {
                                         list.Add(new JavaInstallation
@@ -135,15 +289,149 @@ namespace JavaChoose
                         }
                     }
                 }
-                catch (System.Security.SecurityException) { /* 忽略 */ }
-                catch (UnauthorizedAccessException) { /* 忽略 */ }
+                catch (System.Security.SecurityException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            return list;
+        }
+
+        static List<JavaInstallation> ScanDirectories()
+        {
+            var list = new List<JavaInstallation>();
+            var dirsToScan = new List<string>
+            {
+                @"C:\Program Files\Java",
+                @"C:\Program Files (x86)\Java",
+                @"C:\Java",
+                @"D:\Java",
+                @"E:\Java",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Java"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Java"),
+                @"C:\Program Files\AdoptOpenJDK",
+                @"C:\Program Files\Eclipse Adoptium",
+                @"C:\Program Files\Amazon Corretto",
+                @"C:\Program Files\Microsoft\jdk",
+                @"C:\Program Files\BellSoft\Liberica",
+                @"C:\Program Files\GraalVM",
+            };
+
+            string extra = Environment.GetEnvironmentVariable("JAVACHOOSE_EXTRA_PATHS");
+            if (!string.IsNullOrEmpty(extra))
+            {
+                foreach (var p in extra.Split(';'))
+                {
+                    string trimmed = p.Trim();
+                    if (!string.IsNullOrEmpty(trimmed))
+                        dirsToScan.Add(trimmed);
+                }
             }
 
-            // 去重
-            list = list.GroupBy(x => x.InstallPath).Select(g => g.First()).ToList();
-            // 按版本号排序
-            list = list.OrderBy(x => x.MajorVersion).ThenBy(x => x.IsJre).ToList();
+            foreach (var baseDir in dirsToScan)
+            {
+                if (!Directory.Exists(baseDir)) continue;
+                foreach (var dir in Directory.GetDirectories(baseDir))
+                {
+                    var item = CreateFromPath(dir);
+                    if (item != null) list.Add(item);
+                }
+            }
             return list;
+        }
+
+        static List<JavaInstallation> FindImported()
+        {
+            var list = new List<JavaInstallation>();
+            string regPath = @"Software\JavaChoose\Imported";
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(regPath))
+                {
+                    if (key == null) return list;
+                    foreach (var valueName in key.GetValueNames())
+                    {
+                        string path = key.GetValue(valueName)?.ToString();
+                        if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) continue;
+                        if (TryParseVersionFromPath(valueName, out int ver))
+                        {
+                            bool isJre = valueName.StartsWith("jre-", StringComparison.OrdinalIgnoreCase);
+                            list.Add(new JavaInstallation
+                            {
+                                VersionName = valueName,
+                                InstallPath = path,
+                                MajorVersion = ver,
+                                IsJre = isJre
+                            });
+                        }
+                        else
+                        {
+                            var item = CreateFromPath(path);
+                            if (item != null) list.Add(item);
+                        }
+                    }
+                }
+            }
+            catch (Exception) { }
+            return list;
+        }
+
+        static JavaInstallation CreateFromPath(string installPath)
+        {
+            if (string.IsNullOrEmpty(installPath) || !Directory.Exists(installPath))
+                return null;
+
+            string binDir = Path.Combine(installPath, "bin");
+            if (!Directory.Exists(binDir)) return null;
+
+            string dirName = new DirectoryInfo(installPath).Name;
+            bool isJre = dirName.IndexOf("jre", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool isJdk = dirName.IndexOf("jdk", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (!isJre && !isJdk)
+            {
+                bool hasJava = File.Exists(Path.Combine(binDir, "java.exe"));
+                bool hasJavac = File.Exists(Path.Combine(binDir, "javac.exe"));
+                if (hasJava && hasJavac)
+                    isJdk = true;
+                else if (hasJava && !hasJavac)
+                    isJre = true;
+                else
+                    return null;
+            }
+
+            if (!TryParseVersionFromPath(dirName, out int version))
+                return null;
+
+            string versionName = isJdk ? $"jdk-{version}" : $"jre-{version}";
+            return new JavaInstallation
+            {
+                VersionName = versionName,
+                InstallPath = installPath,
+                MajorVersion = version,
+                IsJre = isJre
+            };
+        }
+
+        // ========== 版本解析 ==========
+
+        static bool TryParseVersionFromPath(string folderName, out int version)
+        {
+            version = 0;
+            if (string.IsNullOrEmpty(folderName)) return false;
+
+            var match = System.Text.RegularExpressions.Regex.Match(folderName, @"\d+");
+            if (match.Success && int.TryParse(match.Value, out version))
+            {
+                return true;
+            }
+
+            string cleaned = folderName.ToLower()
+                .Replace("jdk-", "").Replace("jre-", "")
+                .Replace("openjdk-", "").Replace("corretto-", "")
+                .Replace("adoptopenjdk-", "").Replace("temurin-", "");
+            if (int.TryParse(cleaned, out version))
+                return true;
+
+            return false;
         }
 
         static bool TryParseVersion(string subKeyName, out int version)
@@ -151,7 +439,6 @@ namespace JavaChoose
             version = 0;
             if (string.IsNullOrEmpty(subKeyName)) return false;
 
-            // 处理 1.8.0_331 格式 → 主版本号 8
             if (subKeyName.StartsWith("1."))
             {
                 var parts = subKeyName.Split('.');
@@ -163,7 +450,6 @@ namespace JavaChoose
             }
             else
             {
-                // 尝试直接解析 "17" 或 "17.0.2" → 17
                 if (int.TryParse(subKeyName, out int v))
                 {
                     version = v;
@@ -208,7 +494,6 @@ namespace JavaChoose
 
         static void SetJavaPath(string numberArg)
         {
-            // 解析数字（支持前导零，如 "008" → 8）
             if (!int.TryParse(numberArg, out int targetVersion))
             {
                 Console.WriteLine("错误：无效的版本号格式。");
@@ -216,8 +501,6 @@ namespace JavaChoose
             }
 
             var all = FindJavaInstallations();
-
-            // 若用户输入以 "00" 开头，则精确匹配 JRE
             bool exactJre = numberArg.StartsWith("00") && numberArg.Length > 2;
 
             IEnumerable<JavaInstallation> candidates;
@@ -233,7 +516,6 @@ namespace JavaChoose
                     Console.WriteLine($"未找到版本号为 {targetVersion} 的 Java 安装。");
                     return;
                 }
-                // 优先选择 JDK
                 var jdk = matched.FirstOrDefault(x => !x.IsJre);
                 if (jdk != null)
                     candidates = new List<JavaInstallation> { jdk };
@@ -255,7 +537,6 @@ namespace JavaChoose
                 return;
             }
 
-            // 修改用户环境变量 PATH
             string userPath = Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User) ?? "";
             var pathList = userPath.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries).ToList();
             pathList.RemoveAll(p => string.Equals(p.Trim(), binPath, StringComparison.OrdinalIgnoreCase));
