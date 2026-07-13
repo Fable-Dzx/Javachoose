@@ -43,7 +43,7 @@ git clone https://github.com/Fable-Dzx/Javachoose.git
 cd Javachoose
 dotnet build -c Release
 dotnet publish -c Release -o ./dist
-
+```
 编译产物位于 `./dist/javachoose.exe`。
 
 ---
